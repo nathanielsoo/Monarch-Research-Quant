@@ -1,0 +1,33 @@
+import yfinance as yf
+import numpy as np
+import matplotlib.pyplot as plt
+
+ticker = 'TSLA'
+
+data = yf.Ticker(ticker)
+price_data = data.history(period='1y')['Close'].dropna()
+
+#Compute log prices
+log_prices = np.log(price_data.values)
+# Calculate log returns (difference of log prices)
+log_returns = np.diff(log_prices) 
+
+#Perform FFT on log returns
+fft_result = np.fft.fft(log_returns)
+frequencies = np.fft.fftfreq(len(fft_result), d=1) 
+magnitude = np.abs(fft_result)
+
+#Use positive frequencies only
+half_n = len(frequencies) // 2
+positive_freqs = frequencies[:half_n]
+positive_magnitude = magnitude[:half_n]
+
+#Plotting magnitude spectrum
+plt.figure(figsize=(14, 6))
+plt.plot(positive_freqs, positive_magnitude, color='blue', linewidth=1.5)
+plt.title(f"{ticker} FFT Magnitude Spectrum of Log Returns (Frequency Domain)")
+plt.xlabel("Frequency (cycles/day)")
+plt.ylabel("Magnitude")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
