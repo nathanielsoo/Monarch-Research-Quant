@@ -1,0 +1,65 @@
+import yfinance as yf
+import numpy as np
+import matplotlib.pyplot as plt
+
+ticker = 'TSLA'
+
+#Filters for frequency bands
+band_filters = [
+    (0.0, 0.05),  # Long-term trend
+    (0.08, 0.16),  # Mid-term cycle
+    (0.24, 0.26)   # Short-term cycle
+]
+
+data = yf.Ticker(ticker)
+price_data = data.history(period='1y')['Close'].dropna()
+
+#Calculate log prices and log returns
+log_prices = np.log(price_data.values)
+log_returns = np.diff(log_prices)
+dates = price_data.index[1:]
+
+#Perform FFT on log returns
+fft_result = np.fft.fft(log_returns)
+frequencies = np.fft.fftfreq(len(fft_result), d=1)
+
+#Create filtered components in frequency domain
+filtered_time_series = []
+for (f_low, f_high) in band_filters:
+    band_fft = np.zeros_like(fft_result, dtype=complex)
+    for i, freq in enumerate(frequencies):
+        if f_low <= abs(freq) <= f_high:
+            band_fft[i] = fft_result[i]
+    band_log_return = np.fft.ifft(band_fft).real
+    filtered_time_series.append((band_log_return, f_low, f_high))
+
+#Converted filtered frequencies back into the time domain
+price_components = []
+initial_price = price_data.values[0]
+for (component, f_low, f_high) in filtered_time_series:
+    reconstructed_log_prices = np.cumsum(component) + log_prices[0] 
+    reconstructed_prices = np.exp(reconstructed_log_prices)         
+    price_components.append((reconstructed_prices, f_low, f_high))
+
+#Plotting results
+fig, axs = plt.subplots(4, 1, figsize=(14, 12), sharex=True)
+
+##Original Price Plot
+axs[0].plot(price_data.index, price_data.values, color='black')
+axs[0].set_title(f"{ticker} Original Closing Prices")
+axs[0].set_ylabel("Price")
+axs[0].grid(True)
+
+##Filtered components price plot
+colors = ['blue', 'green', 'red']
+for i, (component_prices, f_low, f_high) in enumerate(price_components):
+    label = f"Band {i+1}: {f_low:.3f}–{f_high:.3f} cycles/day"
+    axs[i+1].plot(dates, component_prices, color=colors[i], label=label)
+    axs[i+1].set_ylabel("Price")
+    axs[i+1].set_title(f"Filtered Component {i+1}")
+    axs[i+1].legend()
+    axs[i+1].grid(True)
+
+axs[-1].set_xlabel("Date")
+plt.tight_layout()
+plt.show()
