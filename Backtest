@@ -3,47 +3,66 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
-# === USER INPUT ===
+#=== USER INPUT ===
 tickers = ['AAPL', 'MSFT']
-weights = np.array([1.0, 1.0])
 start = datetime.today() - timedelta(days=100)
 end = datetime.today()
 # ===================
 
-# Download data
+#Download data
 price = vbt.YFData.download(tickers, start=start, end=end).get('Close')
 price = price.dropna()
 
-# Compute spread
-spread = price @ weights
+# Compute spread as price difference between MSFT and AAPL
+spread = price['MSFT'] - price['AAPL']
 
-# Simple mean-reversion signal
+# Mean and std for z-score
 mean = spread.rolling(20).mean()
 std = spread.rolling(20).std()
+zscore = (spread - mean) / std
 
-entries = spread < (mean - std)
-exits = spread > mean
+#Entry/exit conditions
+entries_long = zscore <= -2
+exits_long = zscore >= -1
 
-# Create orders for both assets when signal is on
-entries = entries.reindex(price.index, method='ffill').fillna(False)
-exits = exits.reindex(price.index, method='ffill').fillna(False)
+entries_short = zscore >= 2
+exits_short = zscore <= 1
 
-# Convert signal to a position mask (0 or 1)
-signal_active = entries.copy()
-signal_active[exits] = False
-signal_active = signal_active.ffill().fillna(False)
+#Initialize signals
+signal = pd.Series(0, index=price.index, dtype=int)
 
-# Apply weights only when position is active
-target_weights = pd.DataFrame(np.tile(weights, (len(price), 1)),
-                              index=price.index,
-                              columns=price.columns)
+#Apply long/short signal logic
+signal[entries_long] = 1
+signal[entries_short] = -1
 
-actual_weights = target_weights.where(signal_active, 0)
+#Exit logic
+signal[exits_long & (signal.shift().eq(1))] = 0
+signal[exits_short & (signal.shift().eq(-1))] = 0
 
-# Convert weights to target value (normalized to 1)
-target_value = actual_weights.div(np.abs(actual_weights).sum(axis=1), axis=0).fillna(0)
+#Forward-fill positions
+signal = signal.replace(to_replace=0, method='ffill').fillna(0)
 
-# Backtest
+#Create weights based on signal direction
+#Long: +0.5 * AAPL - 0.5 * MSFT
+#Short: -0.5 * AAPL + 0.5 * MSFT
+long_weights = np.array([0.5, -0.5])   # AAPL, MSFT
+short_weights = np.array([-0.5, 0.5])  # AAPL, MSFT
+
+#Build target weights DataFrame
+target_weights = pd.DataFrame(index=price.index, columns=price.columns, dtype=float)
+
+for i in range(len(price)):
+    if signal.iloc[i] == 1:
+        target_weights.iloc[i] = long_weights
+    elif signal.iloc[i] == -1:
+        target_weights.iloc[i] = short_weights
+    else:
+        target_weights.iloc[i] = [0, 0]
+
+#Normalize to target percent
+target_value = target_weights.div(np.abs(target_weights).sum(axis=1), axis=0).fillna(0)
+
+#Backtest
 pf = vbt.Portfolio.from_orders(
     close=price,
     size=target_value,
@@ -52,11 +71,6 @@ pf = vbt.Portfolio.from_orders(
     freq='1D'
 )
 
-# Performance
+#Show performance
 print(pf.stats().to_frame())
-#pf.value().vbt.plot().show()
-
-returns = pf.value().pct_change().fillna(0)
-cum_returns = (1 + returns).cumprod() - 1
-cum_returns.vbt.plot(title="PnL Curve (% Return)").show()
-
+# pf.value().vbt.plot().show()
