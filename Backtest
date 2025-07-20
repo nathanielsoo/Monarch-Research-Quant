@@ -8,11 +8,12 @@ from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.vector_ar.vecm import coint_johansen
 from statsmodels.tsa.stattools import coint
 
-from hmmlearn.hmm import GaussianHMM
-from sklearn.preprocessing import StandardScaler
-from hurst import compute_Hc
-
 import ruptures as rpt
+
+#from hmmlearn.hmm import GaussianHMM
+#from sklearn.preprocessing import StandardScaler
+#from hurst import compute_Hc
+
 
 
 
@@ -81,17 +82,15 @@ def change_point(time_series):
     segment_std = np.std(current_segment)
     current_value = array[-1]
     z_score = (current_value - segment_mean) / segment_std
-    print(f"Current spread value: {current_value:.4f}")
-    print(f"Segment mean: {segment_mean:.4f}")
-    print(f"Z-score: {z_score:.2f}")
+    print(f"Current spread value: {current_value:.4f}, Segment mean: {segment_mean:.4f}, Z-score: {z_score:.2f}")
 
     return abs(z_score)
 
 
-
+asset_list_old = [["IVV", "VOO"], ["INTU", "MSFT"], ["ETN", "PH"], ["ABT", "ZTS"], ["DHR","TMO"]]
 
 #=== USER INPUT ===
-tickers = ['IVV', 'VOO']
+tickers = asset_list_old[0]
 start = datetime.today() - timedelta(days=300)
 end = datetime.today()
 # ===================
@@ -99,7 +98,6 @@ end = datetime.today()
 #Download data
 price = vbt.YFData.download(tickers, start=start, end=end).get('Close')
 price = price.dropna()
-
 
 #Take log prices
 log_price = np.log(price)
@@ -112,7 +110,7 @@ spread = log_price[tickers[1]] - beta * log_price[tickers[0]]
 a = test_cointegration(log_price[tickers[1]], log_price[tickers[0]])[0]
 b = calculate_hurst_exponent(spread)
 c = change_point(spread)
-print(f"Cointegration is {a}, Hurst Exponent is {b}, Change Point is {c}.")
+print(f"Cointegration is {a}, Hurst Exponent is {round(b, 4)}, Change Point is {round(c, 4)}.")
 
 is_favourable_regime = a and b < 0.5 and c < 2
 
@@ -124,21 +122,21 @@ if is_favourable_regime:
     print(f"Favourable Conditions Detected: Hurst Exponent < 0.5 & Cointegration detected between {tickers[0]} and {tickers[1]} & Change Point detected.")
 else:
     print("Unfavourable conditions detected.")
+    exit()
+
 
 
 # Calculate rolling mean and std of spread for z-score (only if favorable regime)
-mean = spread.rolling(20).mean()
-std = spread.rolling(20).std()
+mean = spread.rolling(15).mean()
+std = spread.rolling(15).std()
 zscore = (spread - mean) / std
 
 #Entry/exit signals using zscore and favorable regime
 entries_short = (zscore >= 3) & is_favourable_regime
-exits_short = (zscore < 1) 
-#| (zscore >= 2)
+exits_short = (zscore < 1) | (zscore >= 3.5)
 
 entries_long = (zscore <= -3) & is_favourable_regime
-exits_long = (zscore > -1) 
-#| (zscore <= -2)
+exits_long = (zscore > -1) | (zscore <= -3.5)
 
 signal = pd.Series(0, index=price.index, dtype=int)
 signal[entries_long] = 1
