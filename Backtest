@@ -132,11 +132,13 @@ std = spread.rolling(20).std()
 zscore = (spread - mean) / std
 
 #Entry/exit signals using zscore and favorable regime
-entries_short = (zscore >= 1.75) & is_favourable_regime
-exits_short = (zscore < 1) | (zscore >= 2)
+entries_short = (zscore >= 3) & is_favourable_regime
+exits_short = (zscore < 1) 
+#| (zscore >= 2)
 
-entries_long = (zscore <= -1.75) & is_favourable_regime
-exits_long = (zscore > -1) | (zscore <= -2)
+entries_long = (zscore <= -3) & is_favourable_regime
+exits_long = (zscore > -1) 
+#| (zscore <= -2)
 
 signal = pd.Series(0, index=price.index, dtype=int)
 signal[entries_long] = 1
