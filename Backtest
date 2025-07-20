@@ -3,9 +3,96 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
+from statsmodels.api import OLS, add_constant
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.vector_ar.vecm import coint_johansen
+from statsmodels.tsa.stattools import coint
+
+from hmmlearn.hmm import GaussianHMM
+from sklearn.preprocessing import StandardScaler
+from hurst import compute_Hc
+
+import ruptures as rpt
+
+
+
+def test_cointegration(series_y, series_x, significance=0.05):   
+    #Test if both time series are non stationary
+    pval1 = adfuller(series_x)[1]
+    pval2 = adfuller(series_y)[1]
+    if pval1 < significance  or pval2 < significance: #Both must be non-stationary
+        return False, None, None, None
+    #Fitting model
+    model = OLS(series_y, add_constant(series_x)).fit()
+    #Obtaining Residuals + beta (hedge ratio)
+    resid = model.resid
+    beta = model.params[1]
+    #Testing residuals for stationarity
+    adf_pval = adfuller(resid)[1]
+    #Boolean, which indicates if the pair is cointegrated or not
+    is_cointegrated = adf_pval < significance
+    return is_cointegrated, beta, adf_pval, resid if is_cointegrated else None
+
+
+
+
+
+def calculate_hurst_exponent(ts, start=2, end=20):
+    ts = np.array(ts)
+    # Validation
+    if len(ts) < end:
+        raise ValueError("Time series is too short for the given lag range.")
+    if start < 2:
+        raise ValueError("Start lag must be >= 2.")
+    if end <= start:
+        raise ValueError("End lag must be greater than start lag.")
+    lags = range(start, end)
+    tau = []
+    for lag in lags:
+        diff = ts[lag:] - ts[:-lag]
+        std_dev = np.std(diff)
+        tau.append(std_dev)
+    # log-log regression
+    log_lags = np.log(lags)
+    log_tau = np.log(tau)
+    slope, _ = np.polyfit(log_lags, log_tau, 1)
+    hurst = 2.0 * slope
+    return hurst
+
+
+
+
+def change_point(time_series):
+    array = time_series.to_numpy()
+    bkps = 7
+    algo = rpt.Dynp(model="l2").fit(array)
+    result = algo.predict(n_bkps=bkps)
+    print(result)
+    #rpt.display(array, result)
+
+    # === Z-score deviation check ===
+    segments = [0] + result  # start of segments
+    start_idx = segments[-2]
+    end_idx = segments[-1]   # should be len(array)
+
+    # Segment stats
+    current_segment = array[start_idx:end_idx]
+    segment_mean = np.mean(current_segment)
+    segment_std = np.std(current_segment)
+    current_value = array[-1]
+    z_score = (current_value - segment_mean) / segment_std
+    print(f"Current spread value: {current_value:.4f}")
+    print(f"Segment mean: {segment_mean:.4f}")
+    print(f"Z-score: {z_score:.2f}")
+
+    return abs(z_score)
+
+
+
+
 #=== USER INPUT ===
-tickers = ['AAPL', 'MSFT']
-start = datetime.today() - timedelta(days=100)
+tickers = ['IVV', 'VOO']
+start = datetime.today() - timedelta(days=300)
 end = datetime.today()
 # ===================
 
@@ -13,44 +100,56 @@ end = datetime.today()
 price = vbt.YFData.download(tickers, start=start, end=end).get('Close')
 price = price.dropna()
 
-# Compute spread as price difference between MSFT and AAPL
-spread = price['MSFT'] - price['AAPL']
 
-# Mean and std for z-score
+#Take log prices
+log_price = np.log(price)
+
+#Calculate spread: simple difference of log prices (no hedge ratio)
+beta = test_cointegration(log_price[tickers[1]], log_price[tickers[0]])[1]
+spread = log_price[tickers[1]] - beta * log_price[tickers[0]]
+
+#Combine regime, mean reversion, and cointegration signals
+a = test_cointegration(log_price[tickers[1]], log_price[tickers[0]])[0]
+b = calculate_hurst_exponent(spread)
+c = change_point(spread)
+print(f"Cointegration is {a}, Hurst Exponent is {b}, Change Point is {c}.")
+
+is_favourable_regime = a and b < 0.5 and c < 2
+
+if is_favourable_regime:
+    '''Testing for cointegration is to check how far the current signal is to the mean.
+    Hurst exponent tells us how strongly a time series will mean revert.
+    Change point detection checks if we are in a new regime by comparing how far we are to the most recent structural change - 
+    if we are too far away then we are unlikely to mean revert.'''
+    print(f"Favourable Conditions Detected: Hurst Exponent < 0.5 & Cointegration detected between {tickers[0]} and {tickers[1]} & Change Point detected.")
+else:
+    print("Unfavourable conditions detected.")
+
+
+# Calculate rolling mean and std of spread for z-score (only if favorable regime)
 mean = spread.rolling(20).mean()
 std = spread.rolling(20).std()
 zscore = (spread - mean) / std
 
-#Entry/exit conditions
-entries_long = zscore <= -2
-exits_long = zscore >= -1
+#Entry/exit signals using zscore and favorable regime
+entries_short = (zscore >= 1.75) & is_favourable_regime
+exits_short = (zscore < 1) | (zscore >= 2)
 
-entries_short = zscore >= 2
-exits_short = zscore <= 1
+entries_long = (zscore <= -1.75) & is_favourable_regime
+exits_long = (zscore > -1) | (zscore <= -2)
 
-#Initialize signals
 signal = pd.Series(0, index=price.index, dtype=int)
-
-#Apply long/short signal logic
 signal[entries_long] = 1
 signal[entries_short] = -1
+signal[exits_long & (signal.shift() == 1)] = 0
+signal[exits_short & (signal.shift() == -1)] = 0
+signal = signal.ffill().fillna(0)
 
-#Exit logic
-signal[exits_long & (signal.shift().eq(1))] = 0
-signal[exits_short & (signal.shift().eq(-1))] = 0
+#Portfolio weights
+long_weights = np.array([-1 * beta, 1])
+short_weights = np.array([1 * beta, -1])
 
-#Forward-fill positions
-signal = signal.replace(to_replace=0, method='ffill').fillna(0)
-
-#Create weights based on signal direction
-#Long: +0.5 * AAPL - 0.5 * MSFT
-#Short: -0.5 * AAPL + 0.5 * MSFT
-long_weights = np.array([0.5, -0.5])   # AAPL, MSFT
-short_weights = np.array([-0.5, 0.5])  # AAPL, MSFT
-
-#Build target weights DataFrame
 target_weights = pd.DataFrame(index=price.index, columns=price.columns, dtype=float)
-
 for i in range(len(price)):
     if signal.iloc[i] == 1:
         target_weights.iloc[i] = long_weights
@@ -59,18 +158,20 @@ for i in range(len(price)):
     else:
         target_weights.iloc[i] = [0, 0]
 
-#Normalize to target percent
+# Normalize weights so sum abs weights = 1
 target_value = target_weights.div(np.abs(target_weights).sum(axis=1), axis=0).fillna(0)
 
-#Backtest
+# Backtest
 pf = vbt.Portfolio.from_orders(
     close=price,
     size=target_value,
     size_type='targetpercent',
     direction='both',
-    freq='1D'
+    freq='1D',
+    fees=0.005
 )
 
-#Show performance
+# Show performance stats
 print(pf.stats().to_frame())
-# pf.value().vbt.plot().show()
+#pf.value().vbt.plot().show()
+(pf.value().sum(axis=1) / 2).vbt.plot(title="Total Portfolio Value").show()
