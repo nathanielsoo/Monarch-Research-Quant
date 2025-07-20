@@ -38,7 +38,7 @@ def test_cointegration(series_y, series_x, significance=0.05):
 
 
 
-def calculate_hurst_exponent(ts, start=2, end=20):
+def calculate_hurst_exponent(ts, start=2, end=20): #EDIT 'START' AND 'END'
     ts = np.array(ts)
     # Validation
     if len(ts) < end:
@@ -65,7 +65,7 @@ def calculate_hurst_exponent(ts, start=2, end=20):
 
 def change_point(time_series):
     array = time_series.to_numpy()
-    bkps = 7
+    bkps = 7 #EDIT NUMBER OF BREAKS
     algo = rpt.Dynp(model="l2").fit(array)
     result = algo.predict(n_bkps=bkps)
     print(result)
@@ -112,7 +112,7 @@ b = calculate_hurst_exponent(spread)
 c = change_point(spread)
 print(f"Cointegration is {a}, Hurst Exponent is {round(b, 4)}, Change Point is {round(c, 4)}.")
 
-is_favourable_regime = a and b < 0.5 and c < 2
+is_favourable_regime = a and b < 0.5 and c < 2 #EDIT 0.5 and 2 limits
 
 if is_favourable_regime:
     '''Testing for cointegration is to check how far the current signal is to the mean.
@@ -127,16 +127,16 @@ else:
 
 
 # Calculate rolling mean and std of spread for z-score (only if favorable regime)
-mean = spread.rolling(15).mean()
-std = spread.rolling(15).std()
+mean = spread.rolling(15).mean() #EDIT ROLLING WINDOW
+std = spread.rolling(15).std() #EDIT ROLLING WINDOW
 zscore = (spread - mean) / std
 
 #Entry/exit signals using zscore and favorable regime
-entries_short = (zscore >= 3) & is_favourable_regime
-exits_short = (zscore < 1) | (zscore >= 3.5)
+entries_short = (zscore >= 3) & is_favourable_regime #EDIT Z-SCORE LIMITS
+exits_short = (zscore < 1) | (zscore >= 3.5) #EDIT Z-SCORE LIMITS
 
-entries_long = (zscore <= -3) & is_favourable_regime
-exits_long = (zscore > -1) | (zscore <= -3.5)
+entries_long = (zscore <= -3) & is_favourable_regime #EDIT Z-SCORE LIMITS
+exits_long = (zscore > -1) | (zscore <= -3.5) #EDIT Z-SCORE LIMITS
 
 signal = pd.Series(0, index=price.index, dtype=int)
 signal[entries_long] = 1
